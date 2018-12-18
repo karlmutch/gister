@@ -1,8 +1,3 @@
-// This app is intented to be go-port of the defunckt's gist library in Ruby
-// Currently, uploading single and multiple files are available.
-// You can also create secret gists, and both anonymous and user gists.
-//
-// Author: Viyat Bhalodia
 package main
 
 import (
@@ -13,24 +8,15 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/satori/go.uuid"
 )
 
-//Defines the app version
+// Version defines the app version
 const VERSION = "v0.4.0"
-
-//#TODO: A list of clipboard commands with copy and paste support.
-//This is intended for adding the gist URLs directly to the user clipboard,
-//so that manual copying is not needed.
-const (
-	xclip   = "xclip -o"
-	xsel    = "xsel -o"
-	pbcopy  = "pbpaste"
-	putclip = "getclip"
-)
 
 // Defines different constants used
 // GIT_IO_URL is the Github's URL shortner
@@ -42,16 +28,11 @@ const (
 )
 
 //User agent defines a custom agent (required by GitHub)
-//`token` stores the GITHUB_TOKEN from the env variables
-// GITHUB_TOKEN must be in format of `username:token`
+//`token` stores the GISTER_GITHUB_TOKEN from the env variables
+// GISTER_GITHUB_TOKEN must be in format of `username:token`
 var (
 	USER_AGENT = "gist/" + VERSION
-	token      = os.Getenv("GITHUB_TOKEN")
-)
-
-var (
-	wantshort bool
-	slug      string
+	token      = os.Getenv("GISTER_GITHUB_TOKEN")
 )
 
 // Variables used in `Gist` struct
@@ -75,7 +56,7 @@ type Gist struct {
 	GistFile    map[string]GistFile `json:"files"`
 }
 
-//This function loads the GITHUB_TOKEN from a '$HOME/.gist' file
+//This function loads the GISTER_GITHUB_TOKEN from a '$HOME/.gist' file
 //from the user's home directory.
 func loadTokenFromFile() (token string) {
 	//get the tokenfile
@@ -89,7 +70,7 @@ func loadTokenFromFile() (token string) {
 
 // Defines basic usage when program is run with the help flag
 func usage() {
-	fmt.Fprintf(os.Stderr, "usage: gist [options] file...\n")
+	fmt.Fprintf(os.Stderr, "usage: gist [options] <file>|-\n")
 	flag.PrintDefaults()
 	os.Exit(2)
 }
@@ -102,31 +83,43 @@ func usage() {
 // anonymous gist or not.
 // The response recieved is parsed and the Gist URL is printed to STDOUT.
 func main() {
-	flag.StringVar(&update, "update", "", "id of existing gist to update")
-	flag.StringVar(&slug, "slug", "", "Set prefered short url")
-	flag.BoolVar(&wantshort, "short", true, "Generate short url")
-	flag.BoolVar(&public, "public", false, "Set to true for public gist.")
-	flag.BoolVar(&anonymous, "anonymous", false, "Set to true for anonymous gist user")
+	flag.StringVar(&update, "u", "", "id of existing gist to update")
+	flag.BoolVar(&public, "p", false, "Set to true for public gist.")
+	flag.BoolVar(&anonymous, "a", false, "Set to true for anonymous gist user")
 	flag.StringVar(&description, "d", "", "Description for gist.")
 	flag.Usage = usage
 	flag.Parse()
 
 	files_list := flag.Args()
 	if len(files_list) == 0 {
-		log.Fatal("Error: No files specified.")
+		log.Fatal("Error: No files specified or standard input.")
 	}
 
 	files := map[string]GistFile{}
 
 	for _, filename := range files_list {
-		fmt.Println("Checking file:", filename)
-		content, err := ioutil.ReadFile(filename)
-		if err != nil {
-			log.Fatal("File Error: ", err)
+		var (
+			err     error
+			name    string
+			content []byte
+		)
+
+		if filename == "-" {
+			content, err = ioutil.ReadAll(os.Stdin)
+			if err != nil {
+				log.Fatal("Stdin Error: ", err)
+			}
+			name = uuid.NewV4().String()
+		} else {
+			fmt.Println("Checking file:", filename)
+			content, err = ioutil.ReadFile(filename)
+			if err != nil {
+				log.Fatal("File Error: ", err)
+			}
+			name = filepath.Base(filename)
 		}
 
 		// gists api doesn't allow / on filenames
-		name := filepath.Base(filename)
 		files[name] = GistFile{string(content)}
 	}
 
@@ -196,40 +189,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("===Gist URL===")
 	fmt.Println(responseObj["html_url"])
-	if wantshort {
-		fmt.Println(shorten(responseObj["html_url"].(string)))
-	}
-}
-
-func shorten(s string) string {
-
-	form := url.Values{}
-	form.Add("url", s)
-	if slug != "" {
-		form.Add("code", slug)
-	}
-	req, err := http.NewRequest("POST", GIT_IO_URL, strings.NewReader(form.Encode()))
-	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-
-	client := http.Client{}
-	response, err := client.Do(req)
-	if err != nil {
-		log.Fatal("HTTP error: ", err)
-	}
-	defer response.Body.Close()
-
-	switch response.StatusCode {
-	case 200:
-		// when we use /create we get 200 and the short url on the body
-		b, _ := ioutil.ReadAll(response.Body)
-		return GIT_IO_URL + "/" + string(b)
-	case 201:
-		// when we post to / we get 201 and the whole short url on the Location Header
-		return string(response.Header["Location"][0])
-	default:
-		// epic fail!
-		return s
-	}
 }
